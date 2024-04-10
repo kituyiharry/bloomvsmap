@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
+	"time"
 
 	"github.com/bits-and-blooms/bloom/v3"
 )
@@ -135,6 +136,7 @@ func setupTracing(cfg *Config) func() {
 var (
 	pushEventMap map[string]bool = map[string]bool{}
 	blomfil                      = bloom.NewWithEstimates(12000, 0.1)
+	halfblomfil                  = bloom.NewWithEstimates(6000, 0.1)
 )
 
 func memUsage(mOld, mNew *runtime.MemStats) {
@@ -158,11 +160,15 @@ func ProcessChunkUsingMap(md *Model) {
 func ProcessChunkUsingBloom(md *Model) {
 	if md.Type == "PushEvent" {
 		blomfil.AddString(md.Id)
+		halfblomfil.AddString(md.Id)
 	}
 }
 
 func readAllInMemoryInternal(ctx context.Context, cfg *Config, proc func(*Model)) {
-	req, err := http.Get(LARGE_JSON_FILE)
+	client := http.Client{
+		Timeout: 15 * time.Second,
+	}
+	req, err := client.Get(LARGE_JSON_FILE)
 	if err != nil {
 		log.Fatal("ERROR FETCHING TEST DATA: ", err.Error())
 	}
@@ -181,7 +187,10 @@ func readAllInMemoryInternal(ctx context.Context, cfg *Config, proc func(*Model)
 }
 
 func readAllInMemoryInternalBuffered(ctx context.Context, cfg *Config, proc func(*Model)) {
-	req, err := http.Get(LARGE_JSON_FILE)
+	client := http.Client{
+		Timeout: 15 * time.Second,
+	}
+	req, err := client.Get(LARGE_JSON_FILE)
 	if err != nil {
 		log.Fatal("ERROR FETCHING TEST DATA: ", err.Error())
 	}
@@ -220,7 +229,10 @@ func ReadAllInMemoryBuffered(ctx context.Context, cfg *Config, proc func(*Model)
 }
 
 func readAllStreamingBufferedInternal(ctx context.Context, cfg *Config, proc func(*Model)) {
-	req, err := http.Get(LARGE_JSON_FILE)
+	client := http.Client{
+		Timeout: 15 * time.Second,
+	}
+	req, err := client.Get(LARGE_JSON_FILE)
 	if err != nil {
 		log.Fatal("ERROR FETCHING TEST DATA: ", err.Error())
 	}
@@ -243,7 +255,10 @@ func readAllStreamingBufferedInternal(ctx context.Context, cfg *Config, proc fun
 }
 
 func readAllStreamingInternal(ctx context.Context, cfg *Config, proc func(*Model)) {
-	req, err := http.Get(LARGE_JSON_FILE)
+	client := http.Client{
+		Timeout: 15 * time.Second,
+	}
+	req, err := client.Get(LARGE_JSON_FILE)
 	if err != nil {
 		log.Fatal("ERROR FETCHING TEST DATA: ", err.Error())
 	}
@@ -304,6 +319,8 @@ func Save(filename string, data []byte) error {
 func Confirm() {
 	hitCount := 0
 	missCount := 0
+	halfCoount := 0
+	mhalfCount := 0
 
 	for k, _ := range pushEventMap {
 		if blomfil.TestString(k) {
@@ -311,9 +328,15 @@ func Confirm() {
 		} else {
 			missCount += 1
 		}
+
+		if halfblomfil.TestString(k) {
+			halfCoount += 1
+		} else {
+			mhalfCount += 1
+		}
 	}
 
-	log.Println(fmt.Sprintf("Hits in bloom: %d, Miss in bloom: %d", hitCount, missCount))
+	log.Println(fmt.Sprintf("Hits in bloom: %d, Miss in bloom: %d, Half in: %d, Half miss: %d", hitCount, missCount, halfCoount, mhalfCount))
 }
 
 func main() {
@@ -344,17 +367,23 @@ func main() {
 
 	blomBytes, err := blomfil.GobEncode()
 	if err != nil {
-		log.Fatalf("Error on json Marshal: ")
+		log.Fatalf("Error on gob Marshal: %v", err)
+	}
+
+	halfblomBytes, err := halfblomfil.GobEncode()
+	if err != nil {
+		log.Fatalf("Error on gob Marshal: %v", err)
 	}
 
 	var buf bytes.Buffer
 	gobenc := gob.NewEncoder(&buf)
 	err = gobenc.Encode(pushEventMap)
 	if err != nil {
-		log.Fatalf("Error on json Marshal: ")
+		log.Fatalf("Error on json Marshal: %v", err)
 	}
 
 	Save("mapBytes.gob", buf.Bytes())
 	Save("bloomBytes.gob", blomBytes)
+	Save("halfbloomBytes.gob", halfblomBytes)
 	Confirm()
 }
